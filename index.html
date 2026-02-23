@@ -450,9 +450,21 @@ function saveSettings() {
   scheduleNotifications();
 }
 
+// --- VAPID Public Key for Web Push ---
+const VAPID_PUBLIC_KEY = 'BG4BXBHU4zebHlZFxjg5ekCQ7WDjrruDzhgJf0Mf89KaL1APOGr0gzGMoDT1GnnYDO4g3SV6ZVkW1-mPpW_NfTc';
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
 // --- Notifications ---
 async function toggleNotifications() {
-  if (!('Notification' in window)) {
+  if (!('Notification' in window) || !('serviceWorker' in navigator)) {
     document.getElementById('notifStatus').textContent = 'Notifications not supported in this browser';
     return;
   }
@@ -460,27 +472,72 @@ async function toggleNotifications() {
   const data = loadData();
 
   if (Notification.permission === 'granted') {
-    data.settings.notificationsEnabled = !data.settings.notificationsEnabled;
-    saveData(data);
-    render();
-    scheduleNotifications();
-    return;
-  }
-
-  if (Notification.permission === 'default') {
-    const result = await Notification.requestPermission();
-    if (result === 'granted') {
-      data.settings.notificationsEnabled = true;
+    if (data.settings.notificationsEnabled) {
+      // Turning off
+      data.settings.notificationsEnabled = false;
       saveData(data);
       render();
       scheduleNotifications();
-    } else {
-      document.getElementById('notifStatus').textContent = 'Permission denied. Enable in browser settings.';
+      return;
     }
-    return;
   }
 
-  document.getElementById('notifStatus').textContent = 'Blocked by browser. Check site permissions.';
+  if (Notification.permission !== 'granted') {
+    const result = await Notification.requestPermission();
+    if (result !== 'granted') {
+      document.getElementById('notifStatus').textContent = 'Permission denied. Enable in browser settings.';
+      return;
+    }
+  }
+
+  // Subscribe to Web Push for background notifications
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let subscription = await reg.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+    }
+
+    data.settings.notificationsEnabled = true;
+    data.settings.pushSubscription = JSON.stringify(subscription.toJSON());
+    saveData(data);
+    render();
+    scheduleNotifications();
+
+    // Show the subscription so user can copy it for GitHub Actions
+    showSubscriptionSetup(subscription);
+  } catch(e) {
+    console.error('Push subscription failed:', e);
+    // Show the error so we can debug
+    document.getElementById('notifStatus').textContent = 'Push setup error: ' + e.message;
+    // Fallback: just enable basic notifications
+    data.settings.notificationsEnabled = true;
+    saveData(data);
+    render();
+    scheduleNotifications();
+  }
+}
+
+function showSubscriptionSetup(subscription) {
+  const subJson = JSON.stringify(subscription.toJSON());
+  const existing = document.getElementById('pushSetup');
+  if (existing) existing.remove();
+
+  const div = document.createElement('div');
+  div.id = 'pushSetup';
+  div.style.cssText = 'width:100%;max-width:400px;background:#1e293b;border-radius:1rem;padding:1.25rem;margin-top:1rem;';
+  div.innerHTML = `
+    <div style="font-size:0.875rem;font-weight:600;margin-bottom:0.75rem;color:#22d3ee;">Background Notifications Setup</div>
+    <p style="font-size:0.75rem;color:#94a3b8;margin-bottom:0.75rem;line-height:1.5;">
+      Copy the text below. You'll paste it as a secret in your GitHub repo so notifications work even when the app is closed.
+    </p>
+    <textarea id="subData" readonly style="width:100%;height:80px;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:0.5rem;padding:0.5rem;font-size:0.65rem;font-family:monospace;resize:none;">${subJson}</textarea>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('subData').value);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy to clipboard',2000)" style="margin-top:0.5rem;width:100%;background:#22d3ee;color:#0f172a;border:none;border-radius:0.5rem;padding:0.5rem;font-weight:600;font-size:0.8rem;cursor:pointer;">Copy to clipboard</button>
+  `;
+  document.querySelector('.settings-section').after(div);
 }
 
 let notifTimer = null;
@@ -512,16 +569,8 @@ function scheduleNotifications() {
     cutoff.setHours(14, 0, 0, 0);
     if (now > cutoff) return;
 
-    // Send notification
-    try {
-      const n = new Notification('Take your pill!', {
-        body: "You haven't confirmed your pill today. Don't forget!",
-        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="80">💊</text></svg>',
-        requireInteraction: true,
-        tag: 'pill-reminder'
-      });
-      n.onclick = () => { window.focus(); n.close(); };
-    } catch(e) {}
+    // Send notification via service worker (supports action buttons)
+    showPillNotification("You haven't confirmed your pill today. Don't forget!");
   }, nagMs);
 
   // Also check immediately
@@ -534,14 +583,32 @@ function scheduleNotifications() {
     const reminderTime = new Date();
     reminderTime.setHours(h, m, 0, 0);
     if (now >= reminderTime) {
-      try {
-        new Notification('Take your pill!', {
-          body: "Good morning! Time to take your pill.",
-          tag: 'pill-reminder'
-        });
-      } catch(e) {}
+      showPillNotification("Good morning! Time to take your pill.");
     }
   }, 1000);
+}
+
+async function showPillNotification(body) {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    reg.showNotification('💊 Take your pill!', {
+      body: body,
+      icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="80">💊</text></svg>',
+      badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="80">💊</text></svg>',
+      requireInteraction: true,
+      tag: 'pill-reminder',
+      renotify: true,
+      actions: [
+        { action: 'took-pill', title: '✅ Took it!' },
+        { action: 'snooze', title: '⏰ Snooze 10min' }
+      ]
+    });
+  } catch(e) {
+    // Fallback to basic notification if SW not available
+    try {
+      new Notification('Take your pill!', { body: body, tag: 'pill-reminder' });
+    } catch(e2) {}
+  }
 }
 
 // --- Stats ---
@@ -727,6 +794,25 @@ function dismissInstall() {
 // Register service worker
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
+
+  // Listen for messages from service worker (e.g. "took pill" action)
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data?.action === 'took-pill') {
+      takePill();
+    } else if (event.data?.action === 'snooze') {
+      // Snooze: notify again in 10 minutes
+      setTimeout(() => {
+        showPillNotification("Snooze is up! Time to take your pill.");
+      }, 10 * 60 * 1000);
+    }
+  });
+}
+
+// Also check URL params — if opened via notification with ?taken=true
+if (new URLSearchParams(window.location.search).get('taken') === 'true') {
+  // Auto-mark as taken and clean up URL
+  takePill();
+  window.history.replaceState({}, '', window.location.pathname);
 }
 
 // --- Init ---
