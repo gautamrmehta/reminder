@@ -813,80 +813,80 @@ function dismissInstall() {
   document.getElementById('installBanner').classList.remove('visible');
 }
 
-// Register service worker — force update check to pick up new sw.js
+// Register service worker — force update and activate new version
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
-    .then((reg) => { reg.update(); })
-    .catch(() => {});
+  navigator.serviceWorker.getRegistrations().then((regs) => {
+    // Unregister ALL old service workers first
+    return Promise.all(regs.map((r) => r.unregister()));
+  }).then(() => {
+    // Register fresh
+    return navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+  }).then((reg) => {
+    reg.update();
+    // If there's a waiting worker, tell it to activate
+    if (reg.waiting) reg.waiting.postMessage('skipWaiting');
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if (newWorker) {
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && reg.waiting) {
+            reg.waiting.postMessage('skipWaiting');
+          }
+        });
+      }
+    });
+  }).catch(() => {});
 
-  // Listen for messages from service worker (e.g. "took pill" action)
+  // Listen for postMessage from service worker
   navigator.serviceWorker.addEventListener('message', (event) => {
     if (event.data?.action === 'took-pill') {
       takePill();
-    } else if (event.data?.action === 'snooze') {
-      // Snooze: notify again in 10 minutes
-      setTimeout(() => {
-        showPillNotification("Snooze is up! Time to take your pill.");
-      }, 10 * 60 * 1000);
     }
   });
 }
 
-// --- Sync from IndexedDB (service worker saves here when "Took it!" is tapped) ---
-function syncFromIndexedDB() {
-  return new Promise((resolve) => {
-    try {
-      const req = indexedDB.open('pillReminderSW', 1);
-      req.onupgradeneeded = () => {
-        req.result.createObjectStore('actions', { keyPath: 'id', autoIncrement: true });
-      };
-      req.onsuccess = () => {
-        const db = req.result;
-        const tx = db.transaction('actions', 'readwrite');
-        const store = tx.objectStore('actions');
-        const getAll = store.getAll();
-        getAll.onsuccess = () => {
-          const actions = getAll.result;
-          if (actions.length > 0) {
-            const data = loadData();
-            let changed = false;
-            actions.forEach((action) => {
-              if (action.type === 'took-pill' && action.date) {
-                if (!data.days[action.date]?.taken) {
-                  data.days[action.date] = { taken: true, time: action.time || 'via notification' };
-                  changed = true;
-                }
-              }
-              // Delete the action after processing
-              store.delete(action.id);
-            });
-            if (changed) {
-              saveData(data);
-              render();
-            }
-          }
-          db.close();
-          resolve();
-        };
-        getAll.onerror = () => { db.close(); resolve(); };
-      };
-      req.onerror = () => resolve();
-    } catch(e) { resolve(); }
+// Listen for BroadcastChannel messages from service worker
+try {
+  const pillChannel = new BroadcastChannel('pill-channel');
+  pillChannel.addEventListener('message', (event) => {
+    if (event.data?.action === 'took-pill') {
+      takePill();
+    }
   });
+} catch(e) {}
+
+// Check Cache API for pill-taken flag (set by service worker)
+function checkCacheFlag() {
+  return caches.open('pill-taken-flags').then((cache) => {
+    return cache.match('/pill-taken-today').then((response) => {
+      if (response) {
+        return response.json().then((flagData) => {
+          const data = loadData();
+          if (flagData.date && !data.days[flagData.date]?.taken) {
+            data.days[flagData.date] = { taken: true, time: flagData.time || 'via notification' };
+            saveData(data);
+            render();
+          }
+          // Clear the flag
+          cache.delete('/pill-taken-today');
+        });
+      }
+    });
+  }).catch(() => {});
 }
 
 // --- Init ---
-syncFromIndexedDB().then(() => {
+checkCacheFlag().then(() => {
   render();
   scheduleNotifications();
 });
 
-// Re-render every minute to keep time-based displays current
+// Re-render every minute
 setInterval(render, 60000);
 
-// Re-render on focus — also sync from IndexedDB in case "Took it!" was tapped
+// On focus: check cache flag in case "Took it!" was tapped while away
 window.addEventListener('focus', () => {
-  syncFromIndexedDB().then(() => render());
+  checkCacheFlag().then(() => render());
 });
 </script>
 </body>
