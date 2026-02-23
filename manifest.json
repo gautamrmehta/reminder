@@ -2,7 +2,7 @@
   "name": "Pill Reminder",
   "short_name": "Pill",
   "description": "Daily pill reminder with streak tracking",
-  "start_url": "./pill-reminder.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
