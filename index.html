@@ -813,9 +813,11 @@ function dismissInstall() {
   document.getElementById('installBanner').classList.remove('visible');
 }
 
-// Register service worker
+// Register service worker — force update check to pick up new sw.js
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+    .then((reg) => { reg.update(); })
+    .catch(() => {});
 
   // Listen for messages from service worker (e.g. "took pill" action)
   navigator.serviceWorker.addEventListener('message', (event) => {
