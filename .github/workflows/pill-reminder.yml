@@ -1,0 +1,53 @@
+name: Pill Reminder Notifications
+
+on:
+  schedule:
+    # Runs every 15 minutes between 2pm-7pm UTC (9am-2pm EST)
+    # Adjust these hours to match your timezone!
+    - cron: '*/15 14-19 * * *'
+  workflow_dispatch: # Allow manual trigger for testing
+
+jobs:
+  send-notification:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install web-push
+        run: npm install web-push
+
+      - name: Send push notification
+        env:
+          PUSH_SUBSCRIPTION: ${{ secrets.PUSH_SUBSCRIPTION }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_PUBLIC_KEY: 'BG4BXBHU4zebHlZFxjg5ekCQ7WDjrruDzhgJf0Mf89KaL1APOGr0gzGMoDT1GnnYDO4g3SV6ZVkW1-mPpW_NfTc'
+        run: |
+          node -e "
+          const webpush = require('web-push');
+
+          if (!process.env.PUSH_SUBSCRIPTION) {
+            console.log('No PUSH_SUBSCRIPTION secret set yet. Skipping.');
+            process.exit(0);
+          }
+
+          webpush.setVapidDetails(
+            'mailto:pill-reminder@example.com',
+            process.env.VAPID_PUBLIC_KEY,
+            process.env.VAPID_PRIVATE_KEY
+          );
+
+          const subscription = JSON.parse(process.env.PUSH_SUBSCRIPTION);
+          const payload = JSON.stringify({
+            body: \"Don't forget your pill! Tap 'Took it!' when done.\"
+          });
+
+          webpush.sendNotification(subscription, payload)
+            .then(() => console.log('Push notification sent!'))
+            .catch((err) => {
+              console.error('Push failed:', err.statusCode, err.body);
+              process.exit(1);
+            });
+          "
