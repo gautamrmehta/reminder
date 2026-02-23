@@ -41,7 +41,7 @@ jobs:
 
           const subscription = JSON.parse(process.env.PUSH_SUBSCRIPTION);
           const payload = JSON.stringify({
-            body: \"Don't forget your pill! Tap 'Took it!' when done.\"
+            body: \"Time to take your pill! Tap this notification to confirm.\"
           });
 
           webpush.sendNotification(subscription, payload)
