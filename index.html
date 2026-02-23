@@ -813,81 +813,22 @@ function dismissInstall() {
   document.getElementById('installBanner').classList.remove('visible');
 }
 
-// Register service worker — force update and activate new version
+// Register service worker (don't unregister — that kills push subscriptions!)
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then((regs) => {
-    // Unregister ALL old service workers first
-    return Promise.all(regs.map((r) => r.unregister()));
-  }).then(() => {
-    // Register fresh
-    return navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
-  }).then((reg) => {
-    reg.update();
-    // If there's a waiting worker, tell it to activate
-    if (reg.waiting) reg.waiting.postMessage('skipWaiting');
-    reg.addEventListener('updatefound', () => {
-      const newWorker = reg.installing;
-      if (newWorker) {
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && reg.waiting) {
-            reg.waiting.postMessage('skipWaiting');
-          }
-        });
-      }
-    });
-  }).catch(() => {});
-
-  // Listen for postMessage from service worker
-  navigator.serviceWorker.addEventListener('message', (event) => {
-    if (event.data?.action === 'took-pill') {
-      takePill();
-    }
-  });
-}
-
-// Listen for BroadcastChannel messages from service worker
-try {
-  const pillChannel = new BroadcastChannel('pill-channel');
-  pillChannel.addEventListener('message', (event) => {
-    if (event.data?.action === 'took-pill') {
-      takePill();
-    }
-  });
-} catch(e) {}
-
-// Check Cache API for pill-taken flag (set by service worker)
-function checkCacheFlag() {
-  return caches.open('pill-taken-flags').then((cache) => {
-    return cache.match('/pill-taken-today').then((response) => {
-      if (response) {
-        return response.json().then((flagData) => {
-          const data = loadData();
-          if (flagData.date && !data.days[flagData.date]?.taken) {
-            data.days[flagData.date] = { taken: true, time: flagData.time || 'via notification' };
-            saveData(data);
-            render();
-          }
-          // Clear the flag
-          cache.delete('/pill-taken-today');
-        });
-      }
-    });
-  }).catch(() => {});
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+    .then((reg) => { reg.update(); })
+    .catch(() => {});
 }
 
 // --- Init ---
-checkCacheFlag().then(() => {
-  render();
-  scheduleNotifications();
-});
+render();
+scheduleNotifications();
 
 // Re-render every minute
 setInterval(render, 60000);
 
-// On focus: check cache flag in case "Took it!" was tapped while away
-window.addEventListener('focus', () => {
-  checkCacheFlag().then(() => render());
-});
+// Re-render on focus
+window.addEventListener('focus', () => { render(); });
 </script>
 </body>
 </html>
