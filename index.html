@@ -398,6 +398,25 @@
 </div>
 
 <script>
+// --- EARLY: Handle ?taken=true from service worker notification action ---
+// This runs FIRST before anything else so localStorage write happens immediately
+(function() {
+  if (new URLSearchParams(window.location.search).get('taken') === 'true') {
+    try {
+      const EARLY_KEY = 'pillReminder';
+      const raw = localStorage.getItem(EARLY_KEY);
+      const data = raw ? JSON.parse(raw) : { days: {}, settings: { reminderTime: '08:30', nagInterval: 15, notificationsEnabled: false } };
+      const d = new Date();
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      if (!data.days[key]?.taken) {
+        data.days[key] = { taken: true, time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
+        localStorage.setItem(EARLY_KEY, JSON.stringify(data));
+      }
+    } catch(e) {}
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+})();
+
 // --- Data Layer ---
 const STORAGE_KEY = 'pillReminder';
 
@@ -809,12 +828,6 @@ if ('serviceWorker' in navigator) {
       }, 10 * 60 * 1000);
     }
   });
-}
-
-// Also check URL params — if opened via notification with ?taken=true
-if (new URLSearchParams(window.location.search).get('taken') === 'true') {
-  takePill();
-  window.history.replaceState({}, '', window.location.pathname);
 }
 
 // --- Sync from IndexedDB (service worker saves here when "Took it!" is tapped) ---
