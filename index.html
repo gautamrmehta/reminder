@@ -813,20 +813,66 @@ if ('serviceWorker' in navigator) {
 
 // Also check URL params — if opened via notification with ?taken=true
 if (new URLSearchParams(window.location.search).get('taken') === 'true') {
-  // Auto-mark as taken and clean up URL
   takePill();
   window.history.replaceState({}, '', window.location.pathname);
 }
 
+// --- Sync from IndexedDB (service worker saves here when "Took it!" is tapped) ---
+function syncFromIndexedDB() {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open('pillReminderSW', 1);
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore('actions', { keyPath: 'id', autoIncrement: true });
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction('actions', 'readwrite');
+        const store = tx.objectStore('actions');
+        const getAll = store.getAll();
+        getAll.onsuccess = () => {
+          const actions = getAll.result;
+          if (actions.length > 0) {
+            const data = loadData();
+            let changed = false;
+            actions.forEach((action) => {
+              if (action.type === 'took-pill' && action.date) {
+                if (!data.days[action.date]?.taken) {
+                  data.days[action.date] = { taken: true, time: action.time || 'via notification' };
+                  changed = true;
+                }
+              }
+              // Delete the action after processing
+              store.delete(action.id);
+            });
+            if (changed) {
+              saveData(data);
+              render();
+            }
+          }
+          db.close();
+          resolve();
+        };
+        getAll.onerror = () => { db.close(); resolve(); };
+      };
+      req.onerror = () => resolve();
+    } catch(e) { resolve(); }
+  });
+}
+
 // --- Init ---
-render();
-scheduleNotifications();
+syncFromIndexedDB().then(() => {
+  render();
+  scheduleNotifications();
+});
 
 // Re-render every minute to keep time-based displays current
 setInterval(render, 60000);
 
-// Re-render on focus (in case day changed while tab was in background)
-window.addEventListener('focus', render);
+// Re-render on focus — also sync from IndexedDB in case "Took it!" was tapped
+window.addEventListener('focus', () => {
+  syncFromIndexedDB().then(() => render());
+});
 </script>
 </body>
 </html>

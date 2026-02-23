@@ -1,5 +1,32 @@
-const CACHE_NAME = 'pill-reminder-v2';
+const CACHE_NAME = 'pill-reminder-v3';
 const ASSETS = ['./index.html', './manifest.json'];
+
+// --- IndexedDB helpers (service workers can't use localStorage) ---
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('pillReminderSW', 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore('actions', { keyPath: 'id', autoIncrement: true });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function recordPillTaken() {
+  return openDB().then((db) => {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('actions', 'readwrite');
+      const store = tx.objectStore('actions');
+      const now = new Date();
+      const dateKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+      const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      store.add({ type: 'took-pill', date: dateKey, time: timeStr, timestamp: now.toISOString() });
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  });
+}
 
 // Install: cache the app shell
 self.addEventListener('install', (event) => {
@@ -45,11 +72,19 @@ self.addEventListener('push', (event) => {
   );
 });
 
-// Fetch: serve from cache, fall back to network
+// Fetch: network first for HTML (to get latest), cache for others
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
-  );
+  const url = new URL(event.request.url);
+  if (url.pathname.endsWith('.html') || url.pathname.endsWith('/')) {
+    // Network first for HTML pages
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(event.request))
+    );
+  } else {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request))
+    );
+  }
 });
 
 // Handle notification clicks — including action buttons
@@ -58,17 +93,17 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   if (action === 'took-pill') {
-    // User tapped "Took it!" — mark pill as taken
+    // Record directly to IndexedDB (works even without the page open)
     event.waitUntil(
-      self.clients.matchAll({ type: 'window' }).then((clients) => {
-        if (clients.length > 0) {
-          // Page is open — tell it to mark pill as taken
-          clients[0].postMessage({ action: 'took-pill' });
-          return clients[0].focus();
-        } else {
-          // Page not open — open it with ?taken=true so it auto-marks
-          return self.clients.openWindow('./index.html?taken=true');
-        }
+      recordPillTaken().then(() => {
+        // Also try to tell the page if it's open
+        return self.clients.matchAll({ type: 'window' }).then((clients) => {
+          if (clients.length > 0) {
+            clients[0].postMessage({ action: 'took-pill' });
+            return clients[0].focus();
+          }
+          // Don't need to open the page — it's already saved in IndexedDB
+        });
       })
     );
   } else if (action === 'snooze') {
@@ -89,12 +124,11 @@ self.addEventListener('notificationclick', (event) => {
         }, 10 * 60 * 1000);
       })
     );
-    // Also notify the page if it's open
     self.clients.matchAll({ type: 'window' }).then((clients) => {
       clients.forEach((c) => c.postMessage({ action: 'snooze' }));
     });
   } else {
-    // Tapped the notification body (not an action button) — just open the app
+    // Tapped the notification body — open the app
     event.waitUntil(
       self.clients.matchAll({ type: 'window' }).then((clients) => {
         if (clients.length > 0) {
