@@ -1,5 +1,26 @@
-const CACHE_NAME = 'pill-reminder-v7';
+const CACHE_NAME = 'pill-reminder-v8';
+const TAKEN_CACHE = 'pill-taken-flags';
 const ASSETS = ['./index.html', './manifest.json'];
+
+// Helper: get today's date key
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// Helper: check if pill was taken today
+function wasPillTakenToday() {
+  return caches.open(TAKEN_CACHE).then((cache) => {
+    return cache.match('/pill-taken-' + todayKey()).then((r) => !!r);
+  }).catch(() => false);
+}
+
+// Helper: mark pill as taken today
+function markPillTaken() {
+  return caches.open(TAKEN_CACHE).then((cache) => {
+    return cache.put('/pill-taken-' + todayKey(), new Response('true'));
+  }).catch(() => {});
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -11,36 +32,42 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== TAKEN_CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
 
-// Handle incoming push messages from GitHub Actions
+// Handle incoming push messages — only show if pill NOT taken today
 self.addEventListener('push', (event) => {
   event.waitUntil(
-    self.registration.showNotification('💊 Take your pill!', {
-      body: "Tap this notification to confirm you took it.",
-      requireInteraction: true,
-      tag: 'pill-reminder',
-      renotify: true
+    wasPillTakenToday().then((taken) => {
+      if (taken) {
+        // Already took pill today — skip notification
+        return;
+      }
+      return self.registration.showNotification('\uD83D\uDC8A Take your pill!', {
+        body: "Tap this notification to confirm you took it.",
+        requireInteraction: true,
+        tag: 'pill-reminder',
+        renotify: true
+      });
     })
   );
 });
 
-// Any tap on the notification → open the page with ?taken=true
+// Any tap on the notification → mark as taken + open the page
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
-    self.clients.matchAll({ type: 'window' }).then((clients) => {
-      // If page is open, navigate it
-      for (const client of clients) {
-        if ('navigate' in client) {
-          return client.navigate('./index.html?taken=true').then((c) => c ? c.focus() : null);
+    markPillTaken().then(() => {
+      return self.clients.matchAll({ type: 'window' }).then((clients) => {
+        for (const client of clients) {
+          if ('navigate' in client) {
+            return client.navigate('./index.html?taken=true').then((c) => c ? c.focus() : null);
+          }
         }
-      }
-      // Otherwise open new window
-      return self.clients.openWindow('./index.html?taken=true');
+        return self.clients.openWindow('./index.html?taken=true');
+      });
     })
   );
 });

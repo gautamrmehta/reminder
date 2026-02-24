@@ -412,6 +412,12 @@
         data.days[key] = { taken: true, time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
         localStorage.setItem(EARLY_KEY, JSON.stringify(data));
       }
+      // Also set cache flag so service worker stops showing notifications
+      try {
+        caches.open('pill-taken-flags').then(function(cache) {
+          cache.put('/pill-taken-' + key, new Response('true'));
+        });
+      } catch(e2) {}
     } catch(e) {}
     window.history.replaceState({}, '', window.location.pathname);
   }
@@ -445,18 +451,37 @@ function formatDate(d) {
   return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+// --- Cache API flag (tells service worker to stop notifications) ---
+function setCacheTakenFlag() {
+  try {
+    caches.open('pill-taken-flags').then((cache) => {
+      cache.put('/pill-taken-' + todayKey(), new Response('true'));
+    });
+  } catch(e) {}
+}
+
+function clearCacheTakenFlag() {
+  try {
+    caches.open('pill-taken-flags').then((cache) => {
+      cache.delete('/pill-taken-' + todayKey());
+    });
+  } catch(e) {}
+}
+
 // --- Core Actions ---
 function takePill() {
   const data = loadData();
   const key = todayKey();
   data.days[key] = { taken: true, time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
   saveData(data);
+  setCacheTakenFlag();
   render();
 }
 
 function undoPill() {
   const data = loadData();
   delete data.days[todayKey()];
+  clearCacheTakenFlag();
   saveData(data);
   render();
 }
