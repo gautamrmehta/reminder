@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pill-reminder-v8';
+const CACHE_NAME = 'pill-reminder-v9';
 const TAKEN_CACHE = 'pill-taken-flags';
 const ASSETS = ['./index.html', './manifest.json'];
 
@@ -42,8 +42,16 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     wasPillTakenToday().then((taken) => {
       if (taken) {
-        // Already took pill today — skip notification
-        return;
+        // Already took pill today — show and immediately close
+        // (Chrome requires every push to show a notification)
+        return self.registration.showNotification('', {
+          tag: 'pill-reminder-done',
+          silent: true
+        }).then(() => {
+          return self.registration.getNotifications({ tag: 'pill-reminder-done' });
+        }).then((notifications) => {
+          notifications.forEach((n) => n.close());
+        });
       }
       return self.registration.showNotification('\uD83D\uDC8A Take your pill!', {
         body: "Tap this notification to confirm you took it.",
