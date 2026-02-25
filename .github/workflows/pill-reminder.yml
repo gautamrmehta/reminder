@@ -1,21 +1,35 @@
 name: Pill Reminder Notifications
 
 on:
-  workflow_dispatch: # Allow manual trigger for testing
+  workflow_dispatch:
 
 jobs:
   send-notification:
     runs-on: ubuntu-latest
     steps:
+      - name: Check if pill already taken today
+        run: |
+          TODAY=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+          TAKEN="${{ vars.PILL_TAKEN_DATE }}"
+          if [ "$TAKEN" = "$TODAY" ]; then
+            echo "Pill already taken today ($TODAY). Skipping."
+            echo "SKIP=true" >> $GITHUB_ENV
+          else
+            echo "Pill not taken yet ($TODAY). Sending notification."
+          fi
+
       - name: Setup Node.js
+        if: env.SKIP != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install web-push
+        if: env.SKIP != 'true'
         run: npm install web-push
 
       - name: Send push notification
+        if: env.SKIP != 'true'
         env:
           PUSH_SUBSCRIPTION: ${{ secrets.PUSH_SUBSCRIPTION }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
