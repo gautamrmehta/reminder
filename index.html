@@ -172,13 +172,35 @@
         <div class="notif-status" id="notifStatus"></div>
     </div>
 
+    <div class="settings-section" style="margin-top: 1rem;" id="patSection">
+        <div class="settings-title">GitHub Token</div>
+        <p style="font-size: 0.75rem; color: var(--muted); margin-bottom: 0.75rem; line-height: 1.5;">
+            Paste your GitHub PAT here so the app can stop notifications after you take your pill.
+            This is stored only in your browser — never in the source code.
+        </p>
+        <div style="display: flex; gap: 0.5rem;">
+            <input type="password" id="patInput" placeholder="github_pat_..."
+                   style="flex:1; background: var(--bg); border: 1px solid #334155; border-radius: 0.5rem; color: var(--text); padding: 0.5rem; font-size: 0.75rem; font-family: monospace;">
+            <button onclick="savePatFromInput()" class="notif-btn" style="white-space: nowrap;">Save</button>
+        </div>
+        <div id="patStatus" style="color: var(--muted); font-size: 0.7rem; text-align: center; margin-top: 0.5rem;"></div>
+    </div>
+
 <script>
 // =============================================================
 // CONFIG — GitHub API for PILL_TAKEN_DATE variable
+// PAT is stored in localStorage (not source code) to avoid GitHub secret scanning
 // =============================================================
 const GH_REPO = 'gautamrmehta/reminder';
-const GH_PAT = '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';
 const VAPID_PUBLIC_KEY = 'BG4BXBHU4zebHlZFxjg5ekCQ7WDjrruDzhgJf0Mf89KaL1APOGr0gzGMoDT1GnnYDO4g3SV6ZVkW1-mPpW_NfTc';
+
+function getGhPat() {
+    return localStorage.getItem('gh_pat') || '';
+}
+
+function saveGhPat(pat) {
+    localStorage.setItem('gh_pat', pat);
+}
 
 // =============================================================
 // EARLY: Handle ?taken=true from service worker notification tap
@@ -217,6 +239,11 @@ const VAPID_PUBLIC_KEY = 'BG4BXBHU4zebHlZFxjg5ekCQ7WDjrruDzhgJf0Mf89KaL1APOGr0gz
 // GitHub API: Update PILL_TAKEN_DATE variable
 // =============================================================
 async function updatePillTakenDate(dateStr) {
+    const pat = getGhPat();
+    if (!pat) {
+        console.warn('No GitHub PAT configured — cannot update PILL_TAKEN_DATE');
+        return false;
+    }
     const statusEl = document.getElementById('apiStatus');
     try {
         const resp = await fetch(
@@ -224,7 +251,7 @@ async function updatePillTakenDate(dateStr) {
             {
                 method: 'PATCH',
                 headers: {
-                    'Authorization': `Bearer ${GH_PAT}`,
+                    'Authorization': `Bearer ${pat}`,
                     'Accept': 'application/vnd.github+json',
                     'X-GitHub-Api-Version': '2022-11-28',
                     'Content-Type': 'application/json'
@@ -266,13 +293,15 @@ async function updatePillTakenDate(dateStr) {
 // GitHub API: Clear PILL_TAKEN_DATE (for undo)
 // =============================================================
 async function clearPillTakenDate() {
+    const pat = getGhPat();
+    if (!pat) return;
     try {
         await fetch(
             `https://api.github.com/repos/${GH_REPO}/actions/variables/PILL_TAKEN_DATE`,
             {
                 method: 'PATCH',
                 headers: {
-                    'Authorization': `Bearer ${GH_PAT}`,
+                    'Authorization': `Bearer ${pat}`,
                     'Accept': 'application/vnd.github+json',
                     'X-GitHub-Api-Version': '2022-11-28',
                     'Content-Type': 'application/json'
@@ -590,6 +619,38 @@ function render() {
 }
 
 // =============================================================
+// PAT Setup
+// =============================================================
+function savePatFromInput() {
+    const input = document.getElementById('patInput');
+    const status = document.getElementById('patStatus');
+    const pat = input.value.trim();
+    if (!pat) {
+        status.textContent = 'Please paste your GitHub PAT';
+        status.style.color = '#f87171';
+        return;
+    }
+    saveGhPat(pat);
+    input.value = '';
+    status.style.color = '#34d399';
+    status.textContent = 'Token saved! Notifications will stop after you mark pill as taken.';
+    renderPatStatus();
+}
+
+function renderPatStatus() {
+    const status = document.getElementById('patStatus');
+    const input = document.getElementById('patInput');
+    const pat = getGhPat();
+    if (pat) {
+        input.placeholder = 'Token saved (paste new one to replace)';
+        if (!status.textContent.includes('saved')) {
+            status.style.color = '#34d399';
+            status.textContent = 'Token configured';
+        }
+    }
+}
+
+// =============================================================
 // PWA Install
 // =============================================================
 let deferredPrompt = null;
@@ -620,6 +681,7 @@ if ('serviceWorker' in navigator) {
 
 // Init
 render();
+renderPatStatus();
 
 // Re-render every minute
 setInterval(render, 60000);
